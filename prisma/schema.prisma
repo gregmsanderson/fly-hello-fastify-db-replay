@@ -1,0 +1,21 @@
+// note: Prisma does not handle BigInt so try and avoid that type https://github.com/prisma/studio/issues/614
+// note: using the Prisma client-only approach https://www.prisma.io/docs/concepts/overview/what-is-prisma/data-modeling#using-only-prisma-client
+// 1. create the database using SQL
+// 2. 'npx prisma db pull' to update schema (not using)
+// 3. 'npx prisma generate' to update client
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model items {
+  id         Int       @id @default(autoincrement())
+  name       String    @db.VarChar(255)
+  created_at DateTime? @default(now())
+  updated_at DateTime? @updatedAt
+}
