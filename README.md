@@ -117,16 +117,7 @@ PRIMARY_REGION = "scl"
 
 If you already have a Fastify application then the above changes should be enough to make this technique work. Next time you deploy, your app should use the appropriate read replica or primary database. Writes to a nearby read replica will fail (as expected) and so be replayed in the region your primary database is in (so there needs to be at least one vm in that region to receive the request).
 
-But if you are trying to deploy our sample app from this repo to Fly, please continue:
-
-**Note:** In theory you could deploy this sample app _without_ having a database. _But_ the ORM we are using (Prisma) requires a `DATABASE_URL` to be set. It needs to be a non-empty string. Without that environment variable, it will return an error and so the deployment would fail. To solve that you _could_ add a placeholder, like this:
-
-```toml
-[env]
-DATABASE_URL = "placeholder"
-```
-
-... and then the app _should_ deploy. But since we _will_ create a database first, we don't need to do that.
+Else if you are trying to deploy our sample app from this repo to Fly, please continue.
 
 Edit the app's name in `fly.toml` to one of your choice:
 
@@ -322,13 +313,13 @@ The first thing to check is the region your request is being served from. To put
 }
 ```
 
-If the database read still _seems_ slow, it is possible you have been connected by Fly's proxy to the postgres leader, _not_ the nearby read replica. That's documented within Fly:
+If the database read still _seems_ slow, it is possible you have been connected by Fly's proxy to the postgres leader, _not_ the nearby read replica. That's [documented](https://fly.io/docs/reference/postgres/#high-availability):
 
 > 5433 is the port the keeper tells postgres to listen on. Connecting there goes straight to Postgres, though it might be the leader or the replica
 
-You can confirm that by trying a `/write`. If the regions in the JSON differ but the app _could_ perform a write without replaying the request, well you _know_ that the database-write _must_ have gone to the leader. Because if it had done to a nearby read replica, it would have failed. As read replicas _can't_ be written to. And hence that's why it was slower.
+You can confirm if that's happening by trying a `/write`. If the regions in the JSON are different but the app _could_ write without replaying the request, well you _know_ that the database-write _must_ have gone to the leader. Because if it had done to a nearby read replica, it would have failed. As read replicas _can't_ be written to. And hence that's why it was slower.
 
-Finally, it may help with debugging to add more details to the logs. Our sample app sets the log level based on an environment variable. You can set that in your `fly.toml`:
+It may help with debugging to add more details to the logs. Our sample app sets the log level based on an environment variable. You can set that in your `fly.toml`:
 
 ```toml
 LOG_LEVEL = "debug"
