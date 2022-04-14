@@ -31,7 +31,7 @@ if (typeof error.stack === 'string' && error.stack.includes('SqlState(\"25006\")
       reply.header('fly-replay', 'region='  + process.env.PRIMARY_REGION)
       return reply.status(409).send("Replaying request in " + process.env.PRIMARY_REGION)
     }
-  }
+}
 ```
 
 A complete `setErrorHandler` function _could_ look like this. Your error handler will likely have additional code. But you can see our addition:
