@@ -53,15 +53,13 @@ app.setErrorHandler(async (error, request, reply) => {
 });
 ```
 
-**What does that do?**
+What does that do? First we check the error stack is available to parse. If so, we look for a particular error code thrown by PostgreSQL when we try to write to a read replica: it will have an error code of _25006_. At this point we know what's happened. We need to handle it. To see if we can handle it, we check three things: do we know the region the app is running in, do we now the region the primary database is in, and finally is that a different region? If so, we need to _replay_ this write (which is hitting a read replica) in the region the primary database is in. As we know _there_ it _will_ work. We replay the request by appending a `fly-replay` header and its value contains the region to replay it in.
 
-First we check the error stack is available to parse. If so, we look for a particular error code thrown by PostgreSQL when we try to write to a read replica: it will have an error code of _25006_. At this point we know what's happened. We need to handle it. To see if we can handle it, we check three things: do we know the region the app is running in, do we now the region the primary database is in, and finally is that a different region? If so, we need to _replay_ this write (which is hitting a read replica) in the region the primary database is in. As we know _there_ it _will_ work. We replay the request by appending a `fly-replay` header and its value contains the region to replay it in.
+#### Database URL/port
 
-#### (optional) PrismaClient
+How you do this part will vary depending on how _your_ app interacts with the database. You need to dynamically set the database connection string/URL (or at least its port).
 
-This part will vary depending on how your app interacts with the database.
-
-Our sample app uses the popular [Prisma](https://www.prisma.io/) ORM, using the [Prisma-client only](https://www.prisma.io/docs/concepts/overview/what-is-prisma/data-modeling#using-only-prisma-client) approach. That needs to know the datasource to interact with. The Prisma client can set a value for its database URL at run-time. So that needs to use the same logic as the `setErrorHandler` above: if we know the region the app is running in **and** we know the region the primary database is in **and** the app is not running in that region then we should be interacting with the read replica. We do that by changing the port from `5432` to `5433`. Else we use the default value provided by Fly (which is the primary database, using port `5432`):
+Our sample app uses the [Prisma](https://www.prisma.io/) ORM, using its [Prisma-client only](https://www.prisma.io/docs/concepts/overview/what-is-prisma/data-modeling#using-only-prisma-client) approach. That needs to use the same logic as the `setErrorHandler` above: if we know the region the app is running in **and** we know the region the primary database is in **and** the app is not running in that region then we should be interacting with the read replica. We do that by changing the port from `5432` to `5433`. Else we use the default value provided by Fly (which is the primary database, using port `5432`):
 
 ```js
 const { PrismaClient } = Prisma
@@ -115,9 +113,9 @@ PRIMARY_REGION = "scl"
 
 ## Deploy the app
 
-If you already have a Fastify application then the above changes should be enough to make this technique work. Next time you deploy, your app should use the appropriate read replica or primary database. Writes to a nearby read replica will fail (as expected) and so be replayed in the region your primary database is in (so there needs to be at least one vm in that region to receive the request).
+If you already have a Fastify application then the above changes should be enough to make this technique work. Next time you deploy, your app should use the appropriate read replica or primary database. Writes that hit a nearby read replica will fail (as expected) and be replayed in the region your primary database is in (there needs to be at least one vm in that region to receive the request).
 
-Else if you are trying to deploy our sample app from this repo to Fly, please continue.
+Else if you would like to deploy our sample app from this repo to Fly, please continue.
 
 Edit the app's name in `fly.toml` to one of your choice:
 
@@ -148,7 +146,7 @@ You will then be asked to give your app a name:
 ? App Name (leave blank to use an auto-generated name): your-name-goes-here
 ```
 
-Choose an organization and then a region. For our test we'll pick `lhr`:
+Choose an organization, and then a region. For our test we'll pick `lhr`:
 
 ```
 ? Select region: lhr (London, United Kingdom)
@@ -167,19 +165,21 @@ It will ask if you want to deploy. Say **N** (no):
 Your app is ready. Deploy with `flyctl deploy`
 ```
 
-Why _not_ deploy right now? The sample app is using the [Prisma-client only](https://www.prisma.io/docs/concepts/overview/what-is-prisma/data-modeling#using-only-prisma-client) approach. As mentioned above, Prisma needs a `DATABASE_URL` environment variable to be set (as a non-empty string). Else it will error and the deploy will fail. So now that the app is staged, we need to attach the database to it:
+Why _not_ deploy right now? This sample app is using the [Prisma-client only](https://www.prisma.io/docs/concepts/overview/what-is-prisma/data-modeling#using-only-prisma-client) approach. That needs a `DATABASE_URL` environment variable. Else it will error and the deploy will fail. So far, one has not been. So now that the app is staged, we need to attach the database to it using:
 
 `fly pg attach --postgres-app postgres-database-app-here`
 
-Having done that the sample app _does_ now have a `DATABASE_URL` secret environment variable set. The Fly CLI will show you it (make a temporary note of that in order to use it below).
+The sample app _does_ now have a `DATABASE_URL` secret environment variable set. The Fly CLI will show you that (please make a temporary note of that in order to use it below).
 
-We _could_ deploy _now_. It should work. _But_ Prisma would complain that the `items` table it expects does not exist in the current database. So let's fix that first _before_ we deploy:
+So we _could_ deploy _now_. That should work. _But_ our sample app expects an `items` table for its reads/writes, and we have not made that table using a migration. So let's do that first _before_ we deploy.
 
-## Database schema
+## Items table
 
-Our sample app does **not** use [Prisma's Migrate](https://www.prisma.io/docs/concepts/overview/what-is-prisma/data-modeling#using-prisma-client-and-prisma-migrate) to avoid additional complexity. As such it expects an _items_ table to already exist in the database. So now connect to your database using the credentials Fly showed you when attaching it to the app (the database name will be the same as the app's name).
+Our sample app does **not** use [Prisma's Migrate](https://www.prisma.io/docs/concepts/overview/what-is-prisma/data-modeling#using-prisma-client-and-prisma-migrate) to avoid additional complexity. So we need to have the database to already be set up. Our sample app interacts with an _items_ table. So let's create that table.
 
-Create the `items` table in it:
+Connect to your database using the credentials Fly showed you when attaching it to the app (the database name will be the same as the app's name).
+
+Create a simple `items` table:
 
 ```sql
 -- Table Definition
@@ -192,13 +192,13 @@ CREATE TABLE "public"."items" (
 );
 ```
 
-If you _are_ using Prisma's Migrate, you would normally run your database migration on deploy as a release command (within the `fly.toml` file's `[deploy]` section). Or you could manually run a migration on the vm using `fly ssh console`.
+**Note:** If you **were** using Prisma's Migrate, you would normally run that database migration on deploy as a release command (within the `fly.toml` file's `[deploy]` section). Or you could manually run a migration on the vm using `fly ssh console`.
 
-Finally **now** you can go ahead and deploy the staged sample app. Run:
+Finally **now** go ahead and deploy the sample app. Run:
 
 `fly deploy`
 
-It will take a minute. You should eventually see:
+It will take a minute. You should then see:
 
 ```
 ...
@@ -211,17 +211,17 @@ It will take a minute. You should eventually see:
 
 You can now run `fly open` or directly visit `https://your-app-name.fly.dev` and see the hello world JSON.
 
-But its `/read` and `/write` routes still won't return the correct values. Why? The app currently only has one vm and we need two in order to replay failed writes.
+But its `/write` route won't work yet. Why? The app currently only has one vm but we need two in order to replay failed writes.
 
-## Make the sample app run in multiple regions
+## Make the sample app run in two regions
 
-We'll run `fly regions set lhr scl` to set our app's regions as the UK and Chile (where our primary database is).
+Run `fly regions set lhr scl` to set our app's regions as the UK and Chile (where our primary database is).
 
-We'll remove any backup regions using `fly regions backup set`.
+Then remove any legacy backup regions using `fly regions backup set`.
 
-Now we can check the regions are the ones expected by using `fly regions list`.
+Now we can check the regions are the two expected by using `fly regions list`.
 
-Hsving done that we'll then scale our sample app by running `fly scale count 2`. We then have _two_ vms. One should be nearby (in `lhr`, where we are) and one far away (in `scl`, where our primary database is) in order to test the latency.
+Hsving done that, scale our sample app by running `fly scale count 2`. We then have _two_ vms. One should be nearby (in `lhr`, where we are) and one far away (in `scl`, where our primary database is) in order to test the latency.
 
 You can see its status using `fly status`. You should soon see _two_ vms (in the chosen regions). It may take a minute for the new one to show as running so please wait until it does:
 
@@ -234,15 +234,13 @@ abcdefg1        app     2       scl     run     running 2 total, 2 passing      
 
 ## Try a database read and write
 
-Our example application has a `/read` and `/write` route to test their performance. Normally writes would likely not be done during a GET request but using one makes it simpler to try using a normal web browser.
+Our sample application has a `/read` and `/write` route (normally writes would likely not be done during a GET request but using one makes it simpler to try using a normal web browser).
 
-Now the sample app has vms running in multiple regions, you should be able to see their latency. Our app returns some JSON to show the read/write worked and the regions used.
-
-**Note:** The duration/time (in ms) shown within the returned JSON is the in-app processing time (as you can see from the app's code in `server.js`). It is _not_ the complete http request/response time.
+You should be able to try both to see their latency. Our app returns some JSON to show the read/write worked and which regions were used.
 
 For example:
 
-##### /read
+##### GET /read
 
 ```json
 {
@@ -276,7 +274,7 @@ For example:
 }
 ```
 
-##### /write
+##### GET /write
 
 ```json
 {
@@ -300,9 +298,9 @@ For example:
 
 Fastify's docs say that approach should not be used if your hook modifies the error.
 
-### It doesn't seem to work
+### Reads or writes are slow, or fail
 
-The first thing to check is the region your request is being served from. To put aside replaying for a moment, we know the sample app's `/read` route doesn't need to do any replaying of requests so _that_ should be returned from the _closest_ vm. You can see if it is by either looking at its headers (we added a `fly-region` header) or by looking at the returned JSON:
+The first thing to check is the region your request was served from. We know the sample app's `/read` route doesn't need to do any replaying of requests so _that_ should be returned from the _closest_ vm. You can see if it _is_ by either looking at its headers or by looking at the returned JSON:
 
 ```json
 {
@@ -313,19 +311,19 @@ The first thing to check is the region your request is being served from. To put
 }
 ```
 
-If the database read still _seems_ slow, it is possible you have been connected by Fly's proxy to the postgres leader, _not_ the nearby read replica. That's [documented](https://fly.io/docs/reference/postgres/#high-availability):
+If a database read still _seems_ slow, it is possible you have been connected by Fly's proxy to the postgres leader (the primary) and _not_ the nearby read replica. That's [documented](https://fly.io/docs/reference/postgres/#high-availability):
 
 > 5433 is the port the keeper tells postgres to listen on. Connecting there goes straight to Postgres, though it might be the leader or the replica
 
-You can confirm if that's happening by trying a `/write`. If the regions in the JSON are different but the app _could_ write without replaying the request, well you _know_ that the database-write _must_ have gone to the leader. Because if it had done to a nearby read replica, it would have failed. As read replicas _can't_ be written to. And hence that's why it was slower.
+You can confirm if that's happening by calling the `/write` route. If the regions in that JSON are different _but_ the app _could_ write without replaying the request, well you _know_ that the database-write _must_ have gone to the leader. Because if it had done to a nearby read replica, it would have failed. As read replicas _can't_ be written to. And hence that's why it was slower.
 
-It may help with debugging to add more details to the logs. Our sample app sets the log level based on an environment variable. You can set that in your `fly.toml`:
+If you are still not sure what's happening, it helps with debugging to add more details to the logs. Our sample app sets the log level based on an environment variable. You can set that in your `fly.toml`:
 
 ```toml
 LOG_LEVEL = "debug"
 ```
 
-Deploy the app, and once complete run `fly logs`. You should see lots of lines appear. Mainly these are from Fly's healthchecks (you can adjust their frequency in the `fly.toml` too). You may have seen in our sample app references to `app.log.debug()`. You can add more of your own. We added a log of the read/write latency, and also when the error handler triggers. You should see those lines appear in your logs as you make requests to see what's happening.
+Deploy the app now. Once that's complete, run `fly logs`. You should see _lots_ of lines appear. Mainly these are from Fly's healthchecks (you can adjust their frequency in the `fly.toml` too). You may have seen in our sample app references to `app.log.debug()`. You can add more of your own. We added a log of the read/write latency, and also when the error handler triggers. You should see those lines appear in your logs as you make requests to see what's happening.
 
 Any database writes that _aren't_ requested from the primary region should trigger an error, which is caught in our custom handler. You should see debug log lines to prove that, for example:
 
@@ -361,7 +359,7 @@ DATABASE_URL = ""
 
 > Error validating datasource `db`: the URL must start with the protocol postgresql:// or postgres://
 
-Does your app's `fly.toml` still have a placeholder value set within its `[env]` section? You will need to remove that line once you have attached a real multi-region database to the app. As Fly then sets the real `DATABASE_URL` at runtime. So remove the placeholder value line and run `fly deploy`.
+Does your app's `fly.toml` have a placeholder value for `DATABASE_URL` set within its `[env]` section? Once you have attached a real multi-region database to the app, Fly then sets the real `DATABASE_URL`. So remove any placeholder value line and run `fly deploy`.
 
 ## Run it locally
 
@@ -370,7 +368,7 @@ Running this app locally won't work as intended since writes to the database _wo
 If you do want to try it, you will need `node` (we use `nodemon` too to restart the server upon any change).
 
 1. Clone this repo
-2. Duplicate `.env.example` naming it `.env`
+2. Duplicate `.env.example` naming it `.env`, and set any local values such as `DATABASE_URL`
 3. Run `npm install` to install its dependencies
 4. Run `npm start` to run a local development server
 
